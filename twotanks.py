@@ -1,4 +1,3 @@
-# Tank Battle Game — Final FIS-Enhanced AI with Safe Bonus Spawning
 import os
 from ai_approach_1 import AIApproach1
 from ai_approach_2 import AIApproach2
@@ -361,7 +360,7 @@ def draw_button(text, x, y, w, h):
     window.blit(label, label.get_rect(center=rect.center))
     return rect
 
-reset_game()
+# reset_game()
 play = True
 keys = pygame.key.get_pressed()
 
@@ -369,11 +368,14 @@ while play:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             play = False
+
         if state == "game" and event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             state = "menu"
             pygame.mixer.stop()
+
         if event.type == pygame.MOUSEBUTTONDOWN:
             mx, my = event.pos
+            
             if state == "menu":
                 if menu_new_hvh_rect.collidepoint(mx, my):
                     game_mode = "human_vs_human"
