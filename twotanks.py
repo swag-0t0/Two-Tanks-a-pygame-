@@ -1,12 +1,14 @@
 # Tank Battle Game — Final FIS-Enhanced AI with Safe Bonus Spawning
 import os
+from ai_approach_1 import AIApproach1
+from ai_approach_2 import AIApproach2
+
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
 import pygame
 from random import randint
 import webbrowser
 import tempfile
-import math
 import heapq
 
 pygame.init()
@@ -20,7 +22,6 @@ FPS = 60
 TILE = 32
 
 window = pygame.display.set_mode((WIDTH, HEIGHT))
-# window = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)  # ← Uncomment for fullscreen
 clock = pygame.time.Clock()
 
 fontUI = pygame.font.Font(None, 30)
@@ -157,7 +158,7 @@ class UI:
                 i += 1
 
 class Tank:
-    def __init__(self, color, px, py, direct, keyList, ai_controlled=False):
+    def __init__(self, color, px, py, direct, keyList, ai_controlled=False, ai_approach=None):
         objects.append(self)
         self.type = 'tank'
         self.color = color
@@ -172,9 +173,15 @@ class Tank:
         self.ai_controlled = ai_controlled
         self.is_moving = False
         self.move_channel = pygame.mixer.Channel(CH_BLUE_MOVE if color == 'blue' else CH_RED_MOVE)
-        self.path = []
-        self.path_index = 0
-        self.has_seen_enemy = False
+
+        self.ai_approach = None
+        if ai_controlled and ai_approach:  # Inject AI behavior
+            if ai_approach == AIApproach1:
+                self.ai_approach = ai_approach(self, objects, snd_move, snd_shoot)
+            elif ai_approach == AIApproach2:
+                self.ai_approach = ai_approach(self, objects, snd_shoot)
+            else:
+                self.ai_approach = ai_approach(self, objects)
 
     def update(self):
         self.image = pygame.transform.rotate(imgTanks[self.rank], -self.direct * 90)
@@ -187,8 +194,8 @@ class Tank:
         self.bulletSpeed = BULLET_SPEED[self.rank]
         self.bulletDamage = BULLET_DAMAGE[self.rank]
 
-        if self.ai_controlled:
-            self._ai_update()
+        if self.ai_controlled and self.ai_approach:
+            self.ai_approach.update()
         else:
             self._player_update()
 
@@ -228,161 +235,6 @@ class Tank:
 
         if self.shotTimer > 0:
             self.shotTimer -= 1
-
-    def _ai_update(self):
-        enemy = None
-        bonuses = []
-        for obj in objects:
-            if obj.type == 'tank' and obj != self:
-                enemy = obj
-            elif obj.type == 'bonus':
-                bonuses.append(obj)
-
-        blocks = [obj for obj in objects if obj.type == 'block']
-        my_center = (self.rect.centerx, self.rect.centery)
-
-        # FIS Rule 1: Enemy visibility (0 blocks = visible)
-        visible_enemy = False
-        if enemy:
-            enemy_block_count = count_blocks_in_path(my_center, (enemy.rect.centerx, enemy.rect.centery), blocks)
-            visible_enemy = (enemy_block_count == 0)
-            if visible_enemy:
-                self.has_seen_enemy = True
-
-        # Target: nearest bonus or center
-        if bonuses:
-            nearest_bonus = min(bonuses, key=lambda b: (b.rect.centerx - self.rect.centerx)**2 + (b.rect.centery - self.rect.centery)**2)
-            target = (nearest_bonus.rect.centerx, nearest_bonus.rect.centery)
-            # FIS Rule 2: Shoot if exactly one block blocks the bonus
-            block_count_to_bonus = count_blocks_in_path(my_center, target, blocks)
-        else:
-            target = (WIDTH // 2, HEIGHT // 2)
-            block_count_to_bonus = 0
-
-        # FIS Inference: Apply rules
-        should_shoot = False
-        if self.has_seen_enemy and visible_enemy:
-            should_shoot = True  # Rule 1: shoot enemy
-        elif block_count_to_bonus == 1:
-            should_shoot = True  # Rule 2: clear path to bonus
-
-        # Pathfinding
-        if not self.path or self.path_index >= len(self.path):
-            self.path = self._a_star_path(my_center, target, blocks)
-            self.path_index = 0
-
-        # Movement
-        oldX, oldY = self.rect.topleft
-        moving_now = False
-
-        if self.path and self.path_index < len(self.path):
-            next_pos = self.path[self.path_index]
-            dx = next_pos[0] - self.rect.centerx
-            dy = next_pos[1] - self.rect.centery
-            if abs(dx) > abs(dy):
-                step_x = self.moveSpeed if dx > 0 else -self.moveSpeed
-                step_y = 0
-                new_dir = 1 if dx > 0 else 3
-            else:
-                step_x = 0
-                step_y = self.moveSpeed if dy > 0 else -self.moveSpeed
-                new_dir = 2 if dy > 0 else 0
-            self.rect.x += step_x
-            self.rect.y += step_y
-            self.direct = new_dir
-            moving_now = True
-
-            if abs(self.rect.centerx - next_pos[0]) < self.moveSpeed and abs(self.rect.centery - next_pos[1]) < self.moveSpeed:
-                self.path_index += 1
-
-        else:
-            dx = target[0] - self.rect.centerx
-            dy = target[1] - self.rect.centery
-            if abs(dx) > abs(dy):
-                step_x = self.moveSpeed if dx > 0 else -self.moveSpeed
-                step_y = 0
-                new_dir = 1 if dx > 0 else 3
-            else:
-                step_x = 0
-                step_y = self.moveSpeed if dy > 0 else -self.moveSpeed
-                new_dir = 2 if dy > 0 else 0
-            self.rect.x += step_x
-            self.rect.y += step_y
-            self.direct = new_dir
-            moving_now = True
-
-        self.rect.clamp_ip(pygame.Rect(0, 0, WIDTH, HEIGHT))
-        for obj in objects:
-            if obj != self and (obj.type == 'block' or obj.type == 'tank') and self.rect.colliderect(obj.rect):
-                self.rect.topleft = oldX, oldY
-                moving_now = False
-                self.path = []
-                self.path_index = 0
-                break
-
-        if moving_now and not self.is_moving:
-            if snd_move: self.move_channel.play(snd_move, loops=-1)
-            self.is_moving = True
-        elif not moving_now and self.is_moving:
-            self.move_channel.stop()
-            self.is_moving = False
-
-        # Shooting (FIS Defuzzification: crisp True/False)
-        if should_shoot and self.shotTimer == 0:
-            Bullet(self, self.rect.centerx, self.rect.centery,
-                   DIRECTS[self.direct][0] * self.bulletSpeed,
-                   DIRECTS[self.direct][1] * self.bulletSpeed,
-                   self.bulletDamage)
-            if snd_shoot: snd_shoot.play()
-            self.shotTimer = self.shotDelay
-
-        if self.shotTimer > 0:
-            self.shotTimer -= 1
-
-    def _a_star_path(self, start, goal, blocks):
-        def heuristic(a, b):
-            return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
-        start_grid = (int(start[0] // TILE), int(start[1] // TILE))
-        goal_grid = (int(goal[0] // TILE), int(goal[1] // TILE))
-
-        open_set = []
-        heapq.heappush(open_set, (0, start_grid))
-        came_from = {}
-        g_score = {start_grid: 0}
-        f_score = {start_grid: heuristic(start_grid, goal_grid)}
-
-        while open_set:
-            current = heapq.heappop(open_set)[1]
-
-            if current == goal_grid:
-                path = []
-                while current in came_from:
-                    path.append(current)
-                    current = came_from[current]
-                path.append(start_grid)
-                path.reverse()
-                return [(p[0]*TILE + TILE//2, p[1]*TILE + TILE//2) for p in path]
-
-            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
-                neighbor = (current[0] + dx, current[1] + dy)
-                if not (0 <= neighbor[0] < WIDTH//TILE and 0 <= neighbor[1] < HEIGHT//TILE):
-                    continue
-                blocked = any(
-                    (int(block.rect.x // TILE), int(block.rect.y // TILE)) == neighbor
-                    for block in blocks
-                )
-                if blocked:
-                    continue
-
-                tentative_g_score = g_score[current] + 1
-                if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g_score
-                    f_score[neighbor] = tentative_g_score + heuristic(neighbor, goal_grid)
-                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
-
-        return None
 
     def draw(self):
         window.blit(self.image, self.rect)
@@ -478,17 +330,17 @@ def reset_game():
     global bullets, objects, ui, game_over, winner
     bullets = []; objects = []
     if game_mode == "ai_vs_ai":
-        Tank('blue', TILE, TILE, 1, (0,0,0,0,0), ai_controlled=True)
-        Tank('red', WIDTH - 2*TILE, HEIGHT - 2*TILE, 3, (0,0,0,0,0), ai_controlled=True)
+        Tank('blue', TILE, TILE, 1, (0,0,0,0,0), ai_controlled=True, ai_approach=AIApproach1)
+        Tank('red', WIDTH - 2*TILE, HEIGHT - 2*TILE, 3, (0,0,0,0,0), ai_controlled=True, ai_approach=AIApproach2)
         for _ in range(3):
-            spawn_bonus_safely()  # ← SAFE SPAWN
+            spawn_bonus_safely()
     elif game_mode == "human_vs_ai":
         Tank('blue', 100, HEIGHT//2 - TILE//2, 0, (pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s, pygame.K_SPACE), ai_controlled=False)
-        Tank('red', WIDTH - 100 - TILE, HEIGHT//2 - TILE//2, 0, (0,0,0,0,0), ai_controlled=True)
+        Tank('red', WIDTH - 100 - TILE, HEIGHT//2 - TILE//2, 0, (0,0,0,0,0), ai_controlled=True, ai_approach=AIApproach1)
     else:
         Tank('blue', 100, HEIGHT//2 - TILE//2, 0, (pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s, pygame.K_SPACE), ai_controlled=False)
         Tank('red', WIDTH - 100 - TILE, HEIGHT//2 - TILE//2, 0, (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN, pygame.K_RETURN), ai_controlled=False)
-    
+
     ui = UI()
     for _ in range(50):
         while True:
@@ -576,8 +428,8 @@ while play:
         lines = [
             "🔵 Blue Tank: W A S D to move, SPACE to shoot",
             "🔴 Red Tank: Arrow Keys + ENTER (Human) or Auto (AI)",
-            "⏸️ Press ESC anytime to pause and return to Menu",
-            "🖱️ Click 'Back' to return to main menu.",
+            "Press ESC anytime to pause and return to Menu",
+            "Click 'Back' to return to main menu.",
         ]
         for i, line in enumerate(lines):
             label = fontUI.render(line, True, "lightgray")
